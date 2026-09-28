@@ -3,6 +3,8 @@ use time::OffsetDateTime;
 use super::model::StockMermaInput;
 use sqlx::{Sqlite, Transaction};
 use crate::stock::model::ReposicionModo;
+use crate::stock::logica;
+
 #[derive(Copy, Clone, Debug)]
 pub enum TipoPrecio { Venta, Costo }
 
@@ -357,14 +359,8 @@ pub async fn registrar_merma(
     Ok(())
 }
 
-
-pub fn factor_por_unidad(unidad: &str) -> Result<i64, String> {
-    match unidad {
-        "MAPLE" => Ok(1),
-        "CAJON" => Ok(12),
-        _ => Err("Unidad inválida (MAPLE|CAJON)".to_string()),
-    }
-}
+// factor_por_unidad se movió a stock::logica (ya no vive acá: no tocaba
+// la DB, así que no le correspondía estar en repo.rs).
 
 pub async fn stock_compra_tx(
     tx: &mut Transaction<'_, Sqlite>,
@@ -454,9 +450,6 @@ pub async fn reporte_stock_reposicion_rango(
         anyhow::bail!("desde/hasta requeridos");
     }
 
-    // SQL:
-    // desde -> 'YYYY-MM-DD 00:00:00'
-    // hasta (inclusive) -> hasta_excl = (hasta + 1 día) 
     let rows = sqlx::query(
         r#"
         SELECT
@@ -499,6 +492,8 @@ pub async fn reporte_stock_reposicion_rango(
         .collect())
 }
 
+// producto_actualizar_reposicion: la validación de modo/factor ahora
+// vive en logica::validar_reposicion. Esta función solo ejecuta el UPDATE.
 pub async fn producto_actualizar_reposicion(
     pool: &SqlitePool,
     id_producto: i64,
@@ -508,15 +503,9 @@ pub async fn producto_actualizar_reposicion(
     if id_producto <= 0 {
         anyhow::bail!("id_producto inválido");
     }
-    if reposicion_modo != "unitario" && reposicion_modo != "cajon" {
-        anyhow::bail!("reposicion_modo inválido (unitario|cajon)");
-    }
-    if reposicion_modo == "cajon" && reposicion_factor <= 0 {
-        anyhow::bail!("reposicion_factor debe ser > 0");
-    }
 
-    // si es unitario, FUERZO el factor 12 (estándar)
-    let factor = if reposicion_modo == "unitario" { 12 } else { reposicion_factor };
+    let (modo, factor) = logica::validar_reposicion(reposicion_modo, reposicion_factor)
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     sqlx::query(
         r#"
@@ -526,7 +515,7 @@ pub async fn producto_actualizar_reposicion(
         WHERE id_producto = ?3
         "#
     )
-    .bind(reposicion_modo)
+    .bind(modo)
     .bind(factor)
     .bind(id_producto)
     .execute(pool)

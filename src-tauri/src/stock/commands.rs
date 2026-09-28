@@ -3,6 +3,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::AppState;
 use crate::stock::repo::{self, TipoPrecio};
+use crate::stock::logica;
 
 use sqlx::Row;
 use sqlx::Error as SqlxError;
@@ -281,15 +282,13 @@ pub async fn precio_hist_listar(state: State<'_, AppState>, input: HistPrecioIn)
 }
 
 
+// stock_fijar_absoluto: el delta y el costo del ajuste ahora los calcula
+// logica::calcular_ajuste_absoluto (antes estaban inline acá abajo).
 #[tauri::command]
 pub async fn stock_fijar_absoluto(
     state: tauri::State<'_, AppState>,
     input: FixAbsInput,
 ) -> Result<(), String> {
-    if input.nuevo < 0 {
-        return Err("Stock objetivo inválido (< 0)".into());
-    }
-
     let pool = &state.pool;
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
@@ -302,30 +301,20 @@ pub async fn stock_fijar_absoluto(
     .await
     .map_err(|e| e.to_string())?;
 
-    //  calcular delta que hay que aplicar
-    let delta = input.nuevo - actual;
+    //  obtener costo_actual del producto (lo necesita el cálculo, haya o no cambio)
+    let costo_actual: i64 = sqlx::query_scalar(
+        "SELECT costo_actual FROM producto WHERE id_producto = ?1"
+    )
+    .bind(input.id_producto)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
 
-    // si no hay cambio, no hacemos nada
+    let (delta, costo_unitario_mov, total_costo_mov) =
+        logica::calcular_ajuste_absoluto(actual, input.nuevo, costo_actual)?;
+
+    // si no hay cambio, no hacemos nada más
     if delta != 0 {
-        //  obtener costo_actual del producto
-        let costo_actual: i64 = sqlx::query_scalar(
-            "SELECT costo_actual FROM producto WHERE id_producto = ?1"
-        )
-        .bind(input.id_producto)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        // Si el delta es NEGATIVO ⇒ se está sacando stock ⇒ pérdida
-        // Si el delta es POSITIVO ⇒ lo tratamos como corrección sin costo económico
-        let (costo_unitario_mov, total_costo_mov) = if delta < 0 {
-            let unidades = -delta; // delta es negativo
-            let total = unidades * costo_actual;
-            (costo_actual, total)
-        } else {
-            (0_i64, 0_i64)
-        };
-
         //  registrar movimiento; el TRIGGER se encarga de actualizar producto_stock
         sqlx::query(
             "INSERT INTO stock_mov (
@@ -355,6 +344,9 @@ pub async fn stock_fijar_absoluto(
 }
 
 
+// reporte_stock_general: todos los cálculos de valor/rotación/variación/
+// ABC/riesgo ahora viven en logica.rs. Este comando solo trae datos,
+// se los pasa a logica y arma el resultado.
 #[tauri::command]
 pub fn reporte_stock_general(
     state: State<'_, AppState>,
@@ -433,7 +425,7 @@ pub fn reporte_stock_general(
     let mut total_inventario: i64 = 0;
     let mut productos: Vec<StockReporteProducto> = Vec::new();
 
-    // Armar productos + métricas básicas
+    // Armar productos + métricas básicas (cálculos delegados a logica::*)
     for r in filas {
         let id_producto: i64 = r.get("id_producto");
         let codigo_producto: String = r.get("codigo_producto");
@@ -441,44 +433,15 @@ pub fn reporte_stock_general(
         let stock_actual: i64 = r.get("stock_actual");
         let costo_unitario: i64 = r.get("costo_unitario");
 
-        let valor_total = stock_actual * costo_unitario;
+        let valor_total = logica::calcular_valor_total(stock_actual, costo_unitario);
         total_inventario += valor_total;
 
         let (ventas_30, ventas_prev_30) =
             ventas_map.get(&id_producto).cloned().unwrap_or((0, 0));
 
-        let mut rotacion_dias: Option<f64> = None;
-        let mut dias_stock_restante: Option<f64> = None;
-        let variacion_pct: Option<f64>;
-
-        if ventas_30 > 0 {
-            let ventas_30_f = ventas_30 as f64;
-            let stock_f = stock_actual.max(0) as f64;
-            let ventas_diarias = ventas_30_f / periodo_dias;
-
-            // cuántos días de periodo necesito para vender un stock equivalente al actual
-            if stock_f > 0.0 {
-                rotacion_dias = Some(periodo_dias * (stock_f / ventas_30_f));
-            }
-
-            // estimación de días de stock restante
-            if ventas_diarias > 0.0 {
-                dias_stock_restante = Some(stock_f / ventas_diarias);
-            }
-        }
-
-        // variación % vs 30 días anteriores
-        variacion_pct = if ventas_30 == 0 && ventas_prev_30 == 0 {
-            None
-        } else if ventas_prev_30 == 0 {
-            Some(100.0)
-        } else {
-            Some(
-                ((ventas_30 as f64 - ventas_prev_30 as f64)
-                    / (ventas_prev_30 as f64))
-                    * 100.0,
-            )
-        };
+        let rotacion_dias = logica::calcular_rotacion_dias(stock_actual, ventas_30, periodo_dias);
+        let dias_stock_restante = logica::calcular_dias_restante(stock_actual, ventas_30, periodo_dias);
+        let variacion_pct = logica::calcular_variacion_pct(ventas_30, ventas_prev_30);
 
         productos.push(StockReporteProducto {
             id_producto,
@@ -497,11 +460,8 @@ pub fn reporte_stock_general(
     }
 
     // Porcentaje de cada producto sobre el valor total
-    if total_inventario > 0 {
-        for p in &mut productos {
-            p.porcentaje_valor =
-                (p.valor_total as f64) / (total_inventario as f64) * 100.0;
-        }
+    for p in &mut productos {
+        p.porcentaje_valor = logica::calcular_porcentaje_valor(p.valor_total, total_inventario);
     }
 
     let mut indices: Vec<usize> = (0..productos.len()).collect();
@@ -509,39 +469,12 @@ pub fn reporte_stock_general(
 
     let mut acumulado = 0.0_f64;
 
-    const DIAS_RIESGO_ALTO: f64  = 7.0;
-    const DIAS_RIESGO_MEDIO: f64 = 30.0;  // cambiá a 20.0 si querés
-
     for idx in indices {
         let p = &mut productos[idx];
         acumulado += p.porcentaje_valor;
 
-        // ABC por valor acumulado
-        let clase = if acumulado <= 80.0 {
-            "A"
-        } else if acumulado <= 95.0 {
-            "B"
-        } else {
-            "C"
-        };
-        p.clasificacion_abc = Some(clase.to_string());
-
-        // Datos necesarios para riesgo
-        let stock: i64 = p.stock_actual;
-        let dias: f64 = p.dias_stock_restante.unwrap_or(f64::INFINITY);
-
-        // RIESGO: basado en stock + días estimados
-        p.riesgo = Some(
-            if stock <= 0 {
-                "alto".to_string()   // sin stock = riesgo ALTO
-            } else if dias <= DIAS_RIESGO_ALTO {
-                "alto".to_string()
-            } else if dias <= DIAS_RIESGO_MEDIO {
-                "medio".to_string()
-            } else {
-                "bajo".to_string()
-            }
-        );
+        p.clasificacion_abc = Some(logica::clasificar_abc(acumulado).to_string());
+        p.riesgo = Some(logica::calcular_riesgo(p.stock_actual, p.dias_stock_restante).to_string());
     }
 
     Ok(StockReporteResultado {
@@ -566,27 +499,17 @@ pub async fn stock_registrar_merma(
         .map_err(|e| e.to_string())
 }
 
+// stock_compra: cantidad_maples y costo_unitario ahora los calcula
+// logica::calcular_compra en un único lugar (antes se calculaban dos
+// veces: una con repo::factor_por_unidad + división manual, y de nuevo
+// más abajo con logica::calcular_compra).
 #[tauri::command(rename = "stock_compra")]
 pub async fn stock_compra(
     state: State<'_, AppState>,
     input: CompraStockInput,
 ) -> Result<(), String> {
-    if input.cantidad <= 0 {
-        return Err("Cantidad inválida".into());
-    }
-    if input.costo_total < 0 {
-        return Err("Costo inválido".into());
-    }
-
-    let factor = repo::factor_por_unidad(input.unidad.as_str())?;
-    let cantidad_maples = input.cantidad * factor;
-
-    if cantidad_maples <= 0 {
-        return Err("Cantidad resultante inválida".into());
-    }
-
-    // floor automático (entero)
-    let costo_unitario = input.costo_total / cantidad_maples;
+    let (cantidad_maples, costo_unitario) =
+        logica::calcular_compra(input.cantidad, input.unidad.as_str(), input.costo_total)?;
 
     let referencia = format!(
         "{} {} → {} maples",
@@ -675,4 +598,3 @@ pub async fn producto_actualizar_reposicion(
     .await
     .map_err(|e| e.to_string())
 }
-

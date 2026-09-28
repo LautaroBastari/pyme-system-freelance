@@ -1,6 +1,7 @@
 use crate::AppState;
+use crate::compras::logica;
 use tauri::State;
-
+ 
 #[tauri::command]
 pub async fn registrar_compra(
     state: State<'_, AppState>,
@@ -10,12 +11,10 @@ pub async fn registrar_compra(
     referencia: Option<String>,
     mantenerCosto: bool,
 ) -> Result<(), String> {
-    if cantidad <= 0 {
-        return Err("La cantidad debe ser positiva".into());
-    }
-
+    logica::validar_compra(idProducto, cantidad, costoUnitario)?;
+ 
     let pool = &state.pool;
-
+ 
     crate::compras::repo::registrar_compra_repo(
         pool,
         idProducto,
@@ -26,6 +25,7 @@ pub async fn registrar_compra(
     )
     .await
     .map_err(|e| e.to_string())?;
-
+ 
     Ok(())
 }
+ 

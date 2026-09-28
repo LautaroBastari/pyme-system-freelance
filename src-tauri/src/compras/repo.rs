@@ -1,4 +1,5 @@
 use sqlx::{SqlitePool, Result};
+use crate::compras::logica;
 
 pub async fn registrar_compra_repo(
     pool: &SqlitePool,
@@ -10,8 +11,8 @@ pub async fn registrar_compra_repo(
 ) -> Result<()> {
     let mut tx = pool.begin().await?;
 
-    // Determinar el costo que realmente se usara
-    let costo_efectivo: i64 = if mantener_costo {
+    // Solo consultamos costo_actual si realmente hace falta (mantener_costo).
+    let costo_actual_producto: i64 = if mantener_costo {
         sqlx::query_scalar::<_, i64>(
             "SELECT costo_actual FROM producto WHERE id_producto = ?1"
         )
@@ -19,8 +20,16 @@ pub async fn registrar_compra_repo(
         .fetch_one(&mut *tx)
         .await?
     } else {
-        costo_unitario
+        // no se usa cuando mantener_costo es false, pero logica:: necesita
+        // el parámetro igual — pasamos 0 como valor no utilizado.
+        0
     };
+
+    let costo_efectivo = logica::determinar_costo_efectivo(
+        mantener_costo,
+        costo_unitario,
+        costo_actual_producto,
+    );
 
     //  Registrar movimiento de stock (compra)
     sqlx::query(
@@ -43,7 +52,7 @@ pub async fn registrar_compra_repo(
     .execute(&mut *tx)
     .await?;
 
-    // 3) Actualizar costo_actual solo si NO marcó "mantener costo"
+    // Actualizar costo_actual solo si NO marcó "mantener costo"
     if !mantener_costo {
         sqlx::query(
             r#"

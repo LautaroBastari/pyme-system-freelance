@@ -3,6 +3,7 @@ use tauri::State;
 use crate::app_state::AppState;
 use crate::users::auth::AuthState;
 
+use super::logica;
 use super::model::{SueldoRegistrarInput, GastoRegistrarInput, GastoListarPeriodoInput, GastoNegocioRow};
 use super::repo;
 use super::model::{TotalesPeriodoInput, TotalOut};
@@ -33,25 +34,22 @@ pub async fn sueldo_registrar(
     let uid = read_uid(&auth, &state)
         .ok_or_else(|| "Tenés que iniciar sesión para registrar un sueldo".to_string())?;
 
-    let desc = input.descripcion.trim();
-    if desc.is_empty() { return Err("descripcion obligatoria".into()); }
-    if input.monto <= 0 { return Err("monto inválido (> 0)".into()); }
-
-    let id_dest = input
-        .id_usuario_destino
-        .ok_or_else(|| "Tenés que seleccionar el usuario destino del sueldo".to_string())?;
+    let desc = logica::normalizar_texto_requerido(&input.descripcion, "descripcion")?;
+    logica::validar_monto_positivo(input.monto)?;
+    let id_dest = logica::requerir_usuario_destino(input.id_usuario_destino)?;
 
     repo::sueldo_insert(
         &state.pool,
         uid,
         input.fecha_hora,
-        desc,
+        &desc,
         input.monto,
         Some(id_dest),
     )
     .await
     .map_err(|e| e.to_string())
 }
+
 // GASTOS
 
 #[tauri::command(rename = "gasto_registrar")]
@@ -64,23 +62,15 @@ pub async fn gasto_registrar(
     let uid = read_uid(&auth, &state)
         .ok_or_else(|| "Tenés que iniciar sesión para registrar un gasto".to_string())?;
 
-    let cat = input.categoria.trim();
-    if cat.is_empty() {
-        return Err("categoria obligatoria".into());
-    }
-    if input.monto <= 0 {
-        return Err("monto inválido (> 0)".into());
-    }
-
-    let desc = input.descripcion
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let cat = logica::normalizar_texto_requerido(&input.categoria, "categoria")?;
+    logica::validar_monto_positivo(input.monto)?;
+    let desc = logica::normalizar_texto_opcional(input.descripcion);
 
     repo::gasto_insert(
         &state.pool,
         uid,
         input.fecha_hora,
-        cat,
+        &cat,
         desc,
         input.monto,
     )

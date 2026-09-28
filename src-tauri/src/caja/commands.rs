@@ -104,21 +104,9 @@ pub async fn caja_cerrar(
 //  NUEVO — RESUMEN DIARIO DEL USUARIO
 
 
-#[derive(Serialize)]
-pub struct MedioPagoResumen {
-    pub medio: String,
-    pub total_medio: i64,
-}
+use super::model::{CajaResumenDiario, MedioPagoResumen};
 
-#[derive(Serialize)]
-pub struct CajaResumenDiario {
-    pub id_cajas: Vec<i64>,
-    pub cantidad_cajas: i32,
-    pub cantidad_ventas: i32,
-    pub total_general: i64,
-    pub por_medio: Vec<MedioPagoResumen>,
-}
-
+// En src-tauri/src/caja/commands.rs
 #[tauri::command]
 pub async fn caja_resumen_diario(
     state: State<'_, AppState>,
@@ -128,85 +116,13 @@ pub async fn caja_resumen_diario(
     let uid = read_uid(&auth, &state)
         .ok_or_else(|| "Tenés que iniciar sesión.".to_string())?;
 
-    // cajas del día
-    let cajas = sqlx::query(
-        r#"
-        SELECT id_caja
-        FROM caja
-        WHERE abierta_por = ?
-          AND abierta_en >= datetime('now','localtime','start of day')
-          AND abierta_en <  datetime('now','localtime','start of day','+1 day')
-        "#)
-        .bind(uid)
-        .fetch_all(&state.pool)
+    // Toda la suciedad de SQL ahora vive encapsulada en repo.rs
+    let resumen = repo::obtener_resumen_diario(&state.pool, uid)
         .await
         .map_err(|e| e.to_string())?;
 
-    let id_cajas: Vec<i64> = cajas.iter().map(|r| r.get::<i64,_>("id_caja")).collect();
-
-    //  total ventas finalizadas del día
-    let ventas_count: i32 = sqlx::query_scalar(
-        r#"
-        SELECT COUNT(*)
-        FROM venta
-        WHERE id_usuario = ?
-          AND estado='finalizada'
-          AND fecha_hora >= datetime('now','localtime','start of day')
-          AND fecha_hora <  datetime('now','localtime','start of day','+1 day')
-        "#)
-        .bind(uid)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let total_general: i64 = sqlx::query_scalar(
-        r#"
-        SELECT COALESCE(SUM(vp.monto),0)
-        FROM venta v
-        JOIN venta_pago vp ON vp.id_venta = v.id_venta
-        WHERE v.id_usuario = ?
-          AND v.estado='finalizada'
-          AND v.fecha_hora >= datetime('now','localtime','start of day')
-          AND v.fecha_hora <  datetime('now','localtime','start of day','+1 day')
-        "#)
-        .bind(uid)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let pagos = sqlx::query(
-        r#"
-        SELECT vp.medio AS medio,
-               SUM(vp.monto) AS total_medio
-        FROM venta v
-        JOIN venta_pago vp ON vp.id_venta = v.id_venta
-        WHERE v.id_usuario = ?
-          AND v.estado='finalizada'
-          AND v.fecha_hora >= datetime('now','localtime','start of day')
-          AND v.fecha_hora <  datetime('now','localtime','start of day','+1 day')
-        GROUP BY vp.medio
-        "#)
-        .bind(uid)
-        .fetch_all(&state.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let por_medio = pagos.into_iter().map(|r| MedioPagoResumen {
-        medio: r.get("medio"),
-        total_medio: r.get("total_medio"),
-    }).collect();
-
-    let cantidad_cajas = id_cajas.len() as i32;
-
-    Ok(CajaResumenDiario {
-        id_cajas,
-        cantidad_cajas,
-        cantidad_ventas: ventas_count,
-        total_general,
-        por_medio,
-    })
+    Ok(resumen)
 }
-
 // NUEVO — CERRAR TODAS LAS CAJAS DEL DÍA DEL USUARIO
 
 #[derive(Deserialize)]
