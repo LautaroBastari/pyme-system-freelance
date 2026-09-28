@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Tauri exige que exista la carpeta del frontend compilado (dist)
+      # para poder compilar el backend Rust, así que armamos el frontend primero.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependencias del frontend
+        run: npm ci
+
+      - name: Build del frontend
+        run: npm run build
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache de dependencias Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo build
+        working-directory: src-tauri
+        run: cargo build
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+
+      # Por ahora clippy solo informa (no rompe el CI por warnings).
+      # Cuando limpies los warnings, agregá: -- -D warnings
+      - name: cargo clippy
+        working-directory: src-tauri
+        run: cargo clippy
