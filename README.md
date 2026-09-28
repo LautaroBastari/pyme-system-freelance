@@ -211,9 +211,9 @@ La base de datos se inicializa y migra automáticamente. En Windows queda en el 
 - [x] Caja con apertura, cierre y resumen diario
 - [x] Reportes de inventario, rentabilidad y ganancias
 - [x] Tests unitarios de la lógica de negocio (66) y CI
-- [ ] Manejo de errores unificado y registro de logs en archivo
-- [ ] Backups automáticos de la base de datos
-- [ ] Instalador descargable desde Releases
+- [x] Manejo de errores unificado y registro de logs en archivo
+- [x] Backups automáticos de la base de datos
+- [x] Instalador descargable desde Releases
 
 ---
 
