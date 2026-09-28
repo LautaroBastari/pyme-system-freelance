@@ -1,5 +1,6 @@
-use sqlx::{SqlitePool, Result};
+use sqlx::SqlitePool;
 use crate::compras::logica;
+use crate::error::AppError;
 
 pub async fn registrar_compra_repo(
     pool: &SqlitePool,
@@ -8,7 +9,7 @@ pub async fn registrar_compra_repo(
     costo_unitario: i64,
     referencia: Option<String>,
     mantener_costo: bool,
-) -> Result<()> {
+) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
 
     // Solo consultamos costo_actual si realmente hace falta (mantener_costo).
@@ -20,8 +21,6 @@ pub async fn registrar_compra_repo(
         .fetch_one(&mut *tx)
         .await?
     } else {
-        // no se usa cuando mantener_costo es false, pero logica:: necesita
-        // el parámetro igual — pasamos 0 como valor no utilizado.
         0
     };
 
@@ -31,7 +30,7 @@ pub async fn registrar_compra_repo(
         costo_actual_producto,
     );
 
-    //  Registrar movimiento de stock (compra)
+    // Registrar movimiento de stock (compra)
     sqlx::query(
         r#"
         INSERT INTO stock_mov (
@@ -67,7 +66,6 @@ pub async fn registrar_compra_repo(
         .await?;
     }
 
-    // El stock_actual lo manejan tus TRIGGERS sobre stock_mov
     tx.commit().await?;
     Ok(())
 }

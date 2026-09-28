@@ -1,4 +1,5 @@
-use sqlx::{Error, SqlitePool};
+use sqlx::SqlitePool;
+use crate::error::AppError;
 
 use super::model::{
     GastoListarPeriodoInput, GastoNegocioRow, SueldoPagoRow, SueldoPagoRowView,
@@ -28,7 +29,7 @@ pub async fn sueldo_insert(
     descripcion: &str,
     monto: i64,
     id_usuario_destino: Option<i64>,
-) -> Result<i64, Error> {
+) -> Result<i64, AppError> {
     if let Some(uid_dest) = id_usuario_destino {
         let ok: Option<i64> = sqlx::query_scalar(
             "SELECT id_usuario FROM usuario WHERE id_usuario = ?1 AND activo = 1",
@@ -38,14 +39,14 @@ pub async fn sueldo_insert(
         .await?;
 
         if ok.is_none() {
-            return Err(Error::RowNotFound);
+            return Err(AppError::Negocio("El usuario destino no existe o está inactivo".into()));
         }
     }
 
     let desc = norm_str(descripcion);
     let fh = norm_opt_string(fecha_hora);
 
-    if let Some(fh) = fh {
+    let id = if let Some(fh) = fh {
         sqlx::query_scalar::<_, i64>(
             r#"
             INSERT INTO sueldo_pago (fecha_hora, descripcion, monto, id_usuario_destino, id_usuario)
@@ -59,7 +60,7 @@ pub async fn sueldo_insert(
         .bind(id_usuario_destino)
         .bind(id_usuario)
         .fetch_one(pool)
-        .await
+        .await?
     } else {
         sqlx::query_scalar::<_, i64>(
             r#"
@@ -73,8 +74,10 @@ pub async fn sueldo_insert(
         .bind(id_usuario_destino)
         .bind(id_usuario)
         .fetch_one(pool)
-        .await
-    }
+        .await?
+    };
+
+    Ok(id)
 }
 
 pub async fn gasto_insert(
@@ -84,12 +87,12 @@ pub async fn gasto_insert(
     categoria: &str,
     descripcion: Option<String>,
     monto: i64,
-) -> Result<i64, Error> {
+) -> Result<i64, AppError> {
     let cat = norm_str(categoria);
     let desc = norm_opt_string(descripcion);
     let fh = norm_opt_string(fecha_hora);
 
-    if let Some(fh) = fh {
+    let id = if let Some(fh) = fh {
         sqlx::query_scalar::<_, i64>(
             r#"
             INSERT INTO gasto_negocio (fecha_hora, categoria, descripcion, monto, id_usuario)
@@ -103,7 +106,7 @@ pub async fn gasto_insert(
         .bind(monto)
         .bind(id_usuario)
         .fetch_one(pool)
-        .await
+        .await?
     } else {
         sqlx::query_scalar::<_, i64>(
             r#"
@@ -117,8 +120,10 @@ pub async fn gasto_insert(
         .bind(monto)
         .bind(id_usuario)
         .fetch_one(pool)
-        .await
-    }
+        .await?
+    };
+
+    Ok(id)
 }
 
 // LISTADOS
@@ -126,10 +131,10 @@ pub async fn gasto_insert(
 pub async fn gasto_listar_por_periodo(
     pool: &SqlitePool,
     filtro: GastoListarPeriodoInput,
-) -> Result<Vec<GastoNegocioRow>, Error> {
+) -> Result<Vec<GastoNegocioRow>, AppError> {
     let cat = norm_opt_string(filtro.categoria);
 
-    if let Some(cat) = cat {
+    let rows = if let Some(cat) = cat {
         sqlx::query_as::<_, GastoNegocioRow>(
             r#"
             SELECT id_gasto_negocio, fecha_hora, categoria, descripcion, monto, id_usuario
@@ -143,7 +148,7 @@ pub async fn gasto_listar_por_periodo(
         .bind(&filtro.fecha_hasta)
         .bind(cat)
         .fetch_all(pool)
-        .await
+        .await?
     } else {
         sqlx::query_as::<_, GastoNegocioRow>(
             r#"
@@ -156,18 +161,19 @@ pub async fn gasto_listar_por_periodo(
         .bind(&filtro.fecha_desde)
         .bind(&filtro.fecha_hasta)
         .fetch_all(pool)
-        .await
-    }
+        .await?
+    };
+
+    Ok(rows)
 }
 
-/// Listado crudo (sin JOIN)
 pub async fn sueldo_listar_por_periodo(
     pool: &SqlitePool,
     fecha_desde: &str,
     fecha_hasta: &str,
     id_usuario_destino: Option<i64>,
-) -> Result<Vec<SueldoPagoRow>, Error> {
-    if let Some(uid) = id_usuario_destino {
+) -> Result<Vec<SueldoPagoRow>, AppError> {
+    let rows = if let Some(uid) = id_usuario_destino {
         sqlx::query_as::<_, SueldoPagoRow>(
             r#"
             SELECT id_sueldo_pago, fecha_hora, descripcion, monto, id_usuario_destino, id_usuario
@@ -181,7 +187,7 @@ pub async fn sueldo_listar_por_periodo(
         .bind(fecha_hasta)
         .bind(uid)
         .fetch_all(pool)
-        .await
+        .await?
     } else {
         sqlx::query_as::<_, SueldoPagoRow>(
             r#"
@@ -194,8 +200,10 @@ pub async fn sueldo_listar_por_periodo(
         .bind(fecha_desde)
         .bind(fecha_hasta)
         .fetch_all(pool)
-        .await
-    }
+        .await?
+    };
+
+    Ok(rows)
 }
 
 pub async fn sueldo_listar_por_periodo_view(
@@ -203,8 +211,8 @@ pub async fn sueldo_listar_por_periodo_view(
     fecha_desde: &str,
     fecha_hasta: &str,
     id_usuario_destino: Option<i64>,
-) -> Result<Vec<SueldoPagoRowView>, Error> {
-    if let Some(uid) = id_usuario_destino {
+) -> Result<Vec<SueldoPagoRowView>, AppError> {
+    let rows = if let Some(uid) = id_usuario_destino {
         sqlx::query_as::<_, SueldoPagoRowView>(
             r#"
             SELECT sp.id_sueldo_pago,
@@ -224,7 +232,7 @@ pub async fn sueldo_listar_por_periodo_view(
         .bind(fecha_hasta)
         .bind(uid)
         .fetch_all(pool)
-        .await
+        .await?
     } else {
         sqlx::query_as::<_, SueldoPagoRowView>(
             r#"
@@ -243,8 +251,10 @@ pub async fn sueldo_listar_por_periodo_view(
         .bind(fecha_desde)
         .bind(fecha_hasta)
         .fetch_all(pool)
-        .await
-    }
+        .await?
+    };
+
+    Ok(rows)
 }
 
 // TOTALES
@@ -253,10 +263,10 @@ pub async fn gasto_total_por_periodo(
     fecha_desde: &str,
     fecha_hasta: &str,
     categoria: Option<&str>,
-) -> Result<i64, Error> {
+) -> Result<i64, AppError> {
     let cat = norm_opt_str(categoria);
 
-    if let Some(cat) = cat {
+    let total = if let Some(cat) = cat {
         sqlx::query_scalar::<_, i64>(
             r#"
             SELECT COALESCE(SUM(monto), 0)
@@ -269,7 +279,7 @@ pub async fn gasto_total_por_periodo(
         .bind(fecha_hasta)
         .bind(cat)
         .fetch_one(pool)
-        .await
+        .await?
     } else {
         sqlx::query_scalar::<_, i64>(
             r#"
@@ -281,8 +291,10 @@ pub async fn gasto_total_por_periodo(
         .bind(fecha_desde)
         .bind(fecha_hasta)
         .fetch_one(pool)
-        .await
-    }
+        .await?
+    };
+
+    Ok(total)
 }
 
 pub async fn sueldo_total_por_periodo(
@@ -290,8 +302,8 @@ pub async fn sueldo_total_por_periodo(
     fecha_desde: &str,
     fecha_hasta: &str,
     id_usuario_destino: Option<i64>,
-) -> Result<i64, Error> {
-    if let Some(uid) = id_usuario_destino {
+) -> Result<i64, AppError> {
+    let total = if let Some(uid) = id_usuario_destino {
         sqlx::query_scalar::<_, i64>(
             r#"
             SELECT COALESCE(SUM(monto), 0)
@@ -304,7 +316,7 @@ pub async fn sueldo_total_por_periodo(
         .bind(fecha_hasta)
         .bind(uid)
         .fetch_one(pool)
-        .await
+        .await?
     } else {
         sqlx::query_scalar::<_, i64>(
             r#"
@@ -316,6 +328,8 @@ pub async fn sueldo_total_por_periodo(
         .bind(fecha_desde)
         .bind(fecha_hasta)
         .fetch_one(pool)
-        .await
-    }
+        .await?
+    };
+
+    Ok(total)
 }

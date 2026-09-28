@@ -1,6 +1,8 @@
 use sqlx::{SqlitePool, Row};
 use crate::caja::model::{Caja, EstadoCaja};
 use crate::caja::model::{CajaResumenDiario, MedioPagoResumen};
+// AGREGAMOS EL IMPORT DE NUESTRO ERROR
+use crate::error::AppError;
 
 pub async fn existe_caja_abierta(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
     let ok: Option<i64> = sqlx::query_scalar(
@@ -28,7 +30,8 @@ pub async fn ultima_caja_abierta_id(pool: &SqlitePool) -> Result<Option<i64>, sq
     Ok(id)
 }
 
-pub async fn cerrar_caja(pool: &SqlitePool, id_caja: i64, _user_id: i64) -> Result<(), sqlx::Error> {
+// ESTA FIRMA CAMBIA PARA DEVOLVER AppError POR LAS REGLAS DE NEGOCIO
+pub async fn cerrar_caja(pool: &SqlitePool, id_caja: i64, _user_id: i64) -> Result<(), AppError> {
     let hay_venta_en_curso: i64 = sqlx::query_scalar(
         "SELECT EXISTS(
             SELECT 1
@@ -41,9 +44,8 @@ pub async fn cerrar_caja(pool: &SqlitePool, id_caja: i64, _user_id: i64) -> Resu
     .await?;
 
     if hay_venta_en_curso == 1 {
-        return Err(sqlx::Error::Protocol(
-            "No se puede cerrar caja: hay una venta en curso.".into()
-        ));
+        // Acá usamos nuestro AppError::Negocio en lugar de forzar un error SQL falso
+        return Err(AppError::Negocio("No se puede cerrar caja: hay una venta en curso.".to_string()));
     }
 
     let res = sqlx::query(
@@ -57,9 +59,7 @@ pub async fn cerrar_caja(pool: &SqlitePool, id_caja: i64, _user_id: i64) -> Resu
     .await?;
 
     if res.rows_affected() == 0 {
-        return Err(sqlx::Error::Protocol(
-            "No se cerró la caja (no existe o ya estaba cerrada).".into()
-        ));
+        return Err(AppError::Negocio("No se cerró la caja (no existe o ya estaba cerrada).".to_string()));
     }
 
     Ok(())

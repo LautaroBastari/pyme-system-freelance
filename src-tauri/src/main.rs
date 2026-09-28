@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use tauri::Manager;
 use std::sync::{Arc, Mutex};
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 // módulos externos
 mod app_state;
 mod db;
@@ -15,11 +16,23 @@ mod promos;
 mod ventas_admin;
 mod PNL;
 mod home;
+mod error;
 // === Imports de estructuras expuestas ===
 use app_state::AppState;
 use users::auth::AuthState;
 
 fn main() {
+
+    fn setup_logging() {
+    // Crea un archivo nuevo por día: "pyme-system.2026-09-28.log"
+    let file_appender = tracing_appender::rolling::daily("logs", "pyme-system.log");
+    
+    tracing_subscriber::fmt()
+        .with_writer(file_appender.and(std::io::stdout)) // Escribe en archivo y consola
+        .with_env_filter("info,sqlx=warn") // Oculta logs ruidosos de sqlx, muestra infos tuyos
+        .init();
+}
+    setup_logging();
     tauri::Builder::default()
         .setup(|app| {
             use std::sync::{Arc, Mutex};
