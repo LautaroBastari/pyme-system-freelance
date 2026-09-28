@@ -52,4 +52,3 @@ jobs:
         with:
           projectPath: .
           tauriScript: npm run tauri
-          args: build
